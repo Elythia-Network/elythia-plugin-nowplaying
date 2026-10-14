@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		開いたときだけ出す。
 	-->
 	<button type="button" class="_button" :class="$style.label" :aria-expanded="open" @click="open = !open">
-		<img v-if="headline.art" :class="$style.labelArt" :src="headline.art" alt=""/>
+		<img v-if="safeArt(headline.art)" :class="$style.labelArt" :src="safeArt(headline.art)" alt=""/>
 		<i v-else :class="[$style.labelIcon, 'ti ti-music']"></i>
 
 		<span v-if="playing" :class="$style.playing">再生中</span>
@@ -29,11 +29,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 				v-for="(t, i) in recent"
 				:key="i"
 				:class="$style.item"
-				:href="t.url || undefined"
+				:href="safeHref(t.url)"
 				rel="nofollow noopener"
 				target="_blank"
 			>
-				<img v-if="t.art" :class="$style.itemArt" :src="t.art" alt=""/>
+				<img v-if="safeArt(t.art)" :class="$style.itemArt" :src="safeArt(t.art)" alt=""/>
 				<span v-else :class="$style.itemArtBlank"></span>
 				<span :class="$style.itemBody">
 					<span :class="$style.itemTitle">{{ t.title }}</span>
@@ -52,7 +52,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { ref, computed, onMounted } from 'vue';
 import { type SlotContext } from '@/plugin-api.js';
-import { api, relativeTime, serviceLabel } from './api.js';
+import { api, relativeTime, safeArt, safeHref, serviceLabel } from './api.js';
 import type { ProfileResponse, LinkedProfile, Track } from './api.js';
 
 const props = defineProps<{ ctx: SlotContext }>();

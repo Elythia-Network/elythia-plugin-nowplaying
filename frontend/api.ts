@@ -77,3 +77,32 @@ export function relativeTime(unix?: number): string {
 	if (diff < 86400 * 30) return `${Math.floor(diff / 86400)}日前`;
 	return `${Math.floor(diff / (86400 * 30))}か月前`;
 }
+
+const ART_PATH_PREFIX = '/api/plugin/nowplaying/art/';
+
+/**
+ * リンク先に使ってよい URL か (http / https の絶対 URL だけ)。
+ *
+ * 他のサーバーの利用者のプロフィールは、相手のサーバーが返した値を表示する。
+ * バックエンドでも落としているが、`javascript:` などを href に入れないよう
+ * 画面でも確かめる (本体の MkPluginUrlPreview の safeHref と同じ考え方)。
+ */
+export function safeHref(url?: string): string | undefined {
+	if (url == null || url === '') return undefined;
+	try {
+		const u = new URL(url);
+		return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * ジャケット画像に使ってよい URL か (このサーバーのプロキシの形だけ)。
+ *
+ * 外部の画像を読ませると、見た人の IP と時刻が画像の置き場所へ届く。
+ */
+export function safeArt(url?: string): string | undefined {
+	if (url == null || !url.startsWith(ART_PATH_PREFIX)) return undefined;
+	return url;
+}

@@ -237,9 +237,9 @@ func TestRewriteArtURL(t *testing.T) {
 		t.Errorf("貼り替えられていない: %q", got)
 	}
 
-	// 素の URL は触らない。
-	if got := rewriteArtURL("https://example.test/x.png"); got != "https://example.test/x.png" {
-		t.Errorf("関係ない URL を書き換えた: %q", got)
+	// プロキシの形でない URL は空にする。相手が決めた画像を閲覧者に取りに行かせない。
+	if got := rewriteArtURL("https://example.test/x.png"); got != "" {
+		t.Errorf("プロキシの形でない URL を通した: %q", got)
 	}
 
 	// 想定外の鍵は落とす。相手が渡した文字列をそのまま取得先にしない。

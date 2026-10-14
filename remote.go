@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -160,14 +161,78 @@ func remoteLookup(c context.Context, ctx plugin.Context, db *sql.DB, viewerID, u
 		return map[string]any{"linked": false}, nil
 	}
 
-	var profile map[string]any
-	if err := json.Unmarshal(cached, &profile); err != nil {
+	profile, ok := sanitizeRemoteProfile(cached)
+	if !ok {
 		return map[string]any{"linked": false}, nil
 	}
+	return profile, nil
+}
+
+// remoteProfile is the shape a peer's profile answer must have.
+type remoteProfile struct {
+	Linked    bool    `json:"linked"`
+	Service   string  `json:"service"`
+	Username  string  `json:"username"`
+	Playing   *track  `json:"playing"`
+	Recent    []track `json:"recent"`
+	FetchedAt string  `json:"fetchedAt"`
+}
+
+// maxRemoteRecent bounds the listens taken from a peer.
+const maxRemoteRecent = 50
+
+// sanitizeRemoteProfile decodes a peer's answer into the profile shape and
+// drops what we must not pass on.
+//
+// **相手の応答は信用しない (plugin/peer.go)。** 以前は受け取った JSON をそのまま
+// 画面へ返し、アートの URL だけを貼り替えていた。相手は自分のサーバーを持つ
+// 利用者なので、`url` に `javascript:` や任意のページを、`art` に外部の画像を
+// 入れられた (プロフィールを見た人の IP と時刻が相手へ届く)。型に読み直して
+// 知らない欄を落とし、`url` は http(s) の絶対 URL だけ、`art` は自分のプロキシの
+// 形 (`/api/plugin/nowplaying/art/<鍵>`) だけを通す。
+func sanitizeRemoteProfile(cached []byte) (map[string]any, bool) {
+	var p remoteProfile
+	if err := json.Unmarshal(cached, &p); err != nil || !p.Linked {
+		return nil, false
+	}
+	if p.Playing != nil {
+		t := sanitizeTrack(*p.Playing)
+		p.Playing = &t
+	}
+	if len(p.Recent) > maxRemoteRecent {
+		p.Recent = p.Recent[:maxRemoteRecent]
+	}
+	recent := make([]track, 0, len(p.Recent))
+	for _, t := range p.Recent {
+		recent = append(recent, sanitizeTrack(t))
+	}
+	return map[string]any{
+		"linked":    true,
+		"service":   p.Service,
+		"username":  p.Username,
+		"playing":   p.Playing,
+		"recent":    recent,
+		"fetchedAt": p.FetchedAt,
+	}, true
+}
+
+// sanitizeTrack keeps an http(s) page URL and an art URL of our own proxy.
+func sanitizeTrack(t track) track {
+	t.URL = safePageURL(t.URL)
 	// 相手が返したアート URL は**相手のインスタンスの**プロキシを指す。
 	// そのまま出すと CSP で表示できないうえ、閲覧者の接続先が相手に漏れる。
-	rewriteArtHosts(profile)
-	return profile, nil
+	t.Art = rewriteArtURL(t.Art)
+	return t
+}
+
+// safePageURL returns raw when it is an absolute http(s) URL with a host, and
+// "" otherwise.
+func safePageURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	return raw
 }
 
 // remoteAcct resolves a user id to its host and username.
@@ -200,32 +265,16 @@ func remoteAcct(c context.Context, ctx plugin.Context, viewerID, userID string) 
 	return *user.Host, user.Username, nil
 }
 
-// rewriteArtHosts points artwork URLs at our own proxy.
-func rewriteArtHosts(v any) {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, val := range t {
-			if s, ok := val.(string); ok {
-				t[k] = rewriteArtURL(s)
-				continue
-			}
-			rewriteArtHosts(val)
-		}
-	case []any:
-		for _, val := range t {
-			rewriteArtHosts(val)
-		}
-	}
-}
-
 // rewriteArtURL keeps only the key part of a peer's proxy URL.
 //
 // **相手の URL をそのまま使わない。** 鍵だけを取り出して自分の URL に組み直す
-// (鍵の形は検証されるので、任意の取得先には化けない)。
+// (鍵の形は検証されるので、任意の取得先には化けない)。プロキシの形でないもの
+// (外部の画像の URL など) は空にする。以前はそのまま返しており、閲覧者の
+// ブラウザが相手の決めた URL の画像を取りに行った。
 func rewriteArtURL(s string) string {
 	i := strings.Index(s, artRoutePrefix)
 	if i < 0 {
-		return s
+		return ""
 	}
 	key := s[i+len(artRoutePrefix):]
 	if !validArtKey(key) {

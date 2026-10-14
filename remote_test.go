@@ -10,21 +10,20 @@ import (
 	"github.com/elythia-network/elythia/plugin/plugintest"
 )
 
-// 入れ子になった応答の中の URL もすべて貼り替えること。
-func TestRewriteArtHosts_Nested(t *testing.T) {
+// 相手の応答のアートの URL は、すべて自分のプロキシへ貼り替えること。
+func TestSanitizeRemoteProfile_RewritesArt(t *testing.T) {
 	raw := `{
-		"playing": {"art": "https://other.example` + artRoutePrefix + `mb:` + sampleMBID + `"},
+		"linked": true, "service": "listenbrainz", "username": "eve",
+		"playing": {"title": "a", "artist": "b", "art": "https://other.example` + artRoutePrefix + `mb:` + sampleMBID + `"},
 		"recent": [
-			{"art": "https://other.example` + artRoutePrefix + `lf:0123456789abcdef0123456789abcdef.png"},
-			{"art": ""}
+			{"title": "c", "artist": "d", "art": "https://other.example` + artRoutePrefix + `lf:0123456789abcdef0123456789abcdef.png"},
+			{"title": "e", "artist": "f", "art": ""}
 		]
 	}`
-	var v map[string]any
-	if err := json.Unmarshal([]byte(raw), &v); err != nil {
-		t.Fatal(err)
+	v, ok := sanitizeRemoteProfile([]byte(raw))
+	if !ok {
+		t.Fatal("linked な応答を捨てた")
 	}
-	rewriteArtHosts(v)
-
 	out, _ := json.Marshal(v)
 	s := string(out)
 	if strings.Contains(s, "other.example") {
@@ -35,6 +34,42 @@ func TestRewriteArtHosts_Nested(t *testing.T) {
 	}
 	if !strings.Contains(s, artRoutePrefix+"lf:") {
 		t.Errorf("履歴のアートが貼り替わっていない: %s", s)
+	}
+}
+
+// 相手の応答の `url` は http(s) の絶対 URL だけ、`art` は自分のプロキシの形だけを
+// 通すこと。知らない欄は落とすこと。
+//
+// 相手は自分のサーバーを持つ利用者なので、`url` に `javascript:` を入れると
+// プロフィールの「最近」のリンクになり、`art` に外部の画像を入れると見た人の IP が
+// 相手へ届いた。
+func TestSanitizeRemoteProfile_DropsHostileValues(t *testing.T) {
+	raw := `{
+		"linked": true, "service": "lastfm", "username": "eve", "extra": "<script>",
+		"playing": {"title": "now", "artist": "x", "url": "javascript:alert(1)", "art": "https://tracker.example/pixel.png"},
+		"recent": [
+			{"title": "a", "artist": "x", "url": "JavaScript:alert(1)"},
+			{"title": "b", "artist": "x", "url": "data:text/html,hi"},
+			{"title": "c", "artist": "x", "url": "//no-scheme.example/p"},
+			{"title": "d", "artist": "x", "url": "https://www.last.fm/music/x", "art": "http://evil.example/` + strings.TrimPrefix(artRoutePrefix, "/") + `not-a-key"}
+		]
+	}`
+	v, ok := sanitizeRemoteProfile([]byte(raw))
+	if !ok {
+		t.Fatal("linked な応答を捨てた")
+	}
+	out, _ := json.Marshal(v)
+	s := string(out)
+	for _, bad := range []string{"javascript", "JavaScript", "data:", "no-scheme", "tracker.example", "evil.example", "extra", "<script>"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("%q が残っている: %s", bad, s)
+		}
+	}
+	if !strings.Contains(s, "https://www.last.fm/music/x") {
+		t.Errorf("正しいページの URL まで落とした: %s", s)
+	}
+	if _, ok := sanitizeRemoteProfile([]byte(`{"linked": false}`)); ok {
+		t.Error("linked でない応答を通した")
 	}
 }
 
@@ -237,7 +272,12 @@ func TestRemoteLookup_AsksThenServesCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := res.(map[string]any)
+	// 画面に出る形 (JSON) で見る。
+	encoded, _ := json.Marshal(res)
+	var m map[string]any
+	if err := json.Unmarshal(encoded, &m); err != nil {
+		t.Fatal(err)
+	}
 	playing, _ := m["playing"].(map[string]any)
 	if playing == nil || playing["title"] != "Roygbiv" {
 		t.Fatalf("取り寄せた分が出ていない: %+v", m)
